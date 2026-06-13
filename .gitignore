@@ -8,3 +8,6 @@ Thumbs.db
 # logs
 logs/
 *.log
+
+# Claude Code
+.claude/
