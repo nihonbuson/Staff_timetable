@@ -340,7 +340,10 @@
     el("assignModalSub").textContent = `${session.title || "(無題)"} ／ Day${session.day} ${timeRange(session.start, session.end)}`;
 
     const existing = getAssignment(session.id, member.id);
-    const segs = existing.length ? existing.map((s) => ({ ...s })) : [{ roleId: "", start: "", end: "" }];
+    // 未設定セルを開いたときは、初期値としてセッションの開始/終了時刻を入れておく
+    const segs = existing.length
+      ? existing.map((s) => ({ ...s }))
+      : [{ roleId: "", start: session.start || "", end: session.end || "" }];
     renderSegments(segs);
     el("assignModal").hidden = false;
   }
@@ -695,7 +698,8 @@
     el("assignSave").addEventListener("click", saveAssign);
     el("assignCancel").addEventListener("click", closeAssignModal);
     el("assignClear").addEventListener("click", () => {
-      const segs = [{ roleId: "", start: "", end: "" }];
+      const s = modalCtx && modalCtx.session;
+      const segs = [{ roleId: "", start: (s && s.start) || "", end: (s && s.end) || "" }];
       renderSegments(segs);
     });
     el("assignModal").addEventListener("click", (e) => {
