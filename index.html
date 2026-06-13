@@ -3,76 +3,109 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Staff Timetable - スタッフシフト表</title>
+  <title>香盤表メーカー - Staff Timetable</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header class="app-header">
-    <h1>🗓️ Staff Timetable</h1>
-    <div class="toolbar">
-      <div class="week-nav">
-        <button id="prevWeek" class="btn" title="前の週">◀</button>
-        <span id="weekLabel" class="week-label">―</span>
-        <button id="nextWeek" class="btn" title="次の週">▶</button>
-        <button id="todayBtn" class="btn btn-ghost">今週</button>
-      </div>
-      <div class="spacer"></div>
-      <label class="mode-switch">
-        <input type="checkbox" id="editToggle" />
-        <span>編集モード</span>
-      </label>
-      <div class="menu">
-        <button id="menuBtn" class="btn btn-ghost" title="メニュー">⋯</button>
-        <div id="menuPanel" class="menu-panel" hidden>
-          <button id="exportBtn" class="menu-item">JSON エクスポート</button>
-          <button id="importBtn" class="menu-item">JSON インポート</button>
-          <button id="printBtn" class="menu-item">印刷</button>
-          <hr />
-          <button id="resetBtn" class="menu-item danger">全データをリセット</button>
-        </div>
-      </div>
-      <input type="file" id="importFile" accept="application/json" hidden />
-    </div>
+    <h1>🎬 香盤表メーカー</h1>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="members">① メンバー設定</button>
+      <button class="tab" data-tab="roles">② 役割設定</button>
+      <button class="tab" data-tab="sessions">③ タイムテーブル設定</button>
+      <button class="tab" data-tab="assign">④ 担当設定</button>
+      <button class="tab" data-tab="display">⑤ 表示</button>
+    </nav>
   </header>
 
   <main>
-    <div id="editControls" class="edit-controls" hidden>
-      <button id="addStaffBtn" class="btn btn-primary">＋ スタッフ追加</button>
-      <span class="hint">セルをクリックしてシフトを入力 / スタッフ名をクリックして編集</span>
-    </div>
+    <!-- ① メンバー設定 -->
+    <section class="panel" id="panel-members">
+      <div class="panel-head">
+        <h2>① メンバー設定</h2>
+        <p class="desc">香盤表に載せるスタッフの氏名を登録します。並び順は表示画面の列の順序になります。</p>
+      </div>
+      <div id="memberList" class="row-list"></div>
+      <button id="addMember" class="btn btn-primary">＋ メンバー追加</button>
+    </section>
 
-    <div class="table-wrap">
-      <table id="timetable" class="timetable">
-        <thead id="tableHead"></thead>
-        <tbody id="tableBody"></tbody>
-      </table>
-    </div>
+    <!-- ② 役割設定 -->
+    <section class="panel" id="panel-roles" hidden>
+      <div class="panel-head">
+        <h2>② 役割設定</h2>
+        <p class="desc">担当する役割（司会・受付・撮影など）を登録します。色は表示・印刷時の目印になります。</p>
+      </div>
+      <div id="roleList" class="row-list"></div>
+      <button id="addRole" class="btn btn-primary">＋ 役割追加</button>
+    </section>
 
-    <section class="legend">
-      <h2>シフト凡例</h2>
-      <ul id="legendList" class="legend-list"></ul>
+    <!-- ③ タイムテーブル設定 -->
+    <section class="panel" id="panel-sessions" hidden>
+      <div class="panel-head">
+        <h2>③ タイムテーブル設定</h2>
+        <p class="desc">カンファレンス（2日間）のセッションを登録します。日・開始/終了時刻・セッション名を入力してください。</p>
+      </div>
+      <div class="conf-meta">
+        <label class="field-inline">
+          <span>イベント名</span>
+          <input type="text" id="confTitle" placeholder="〇〇カンファレンス 2026" />
+        </label>
+        <label class="field-inline">
+          <span>Day1 の日付</span>
+          <input type="date" id="day1Date" />
+        </label>
+        <label class="field-inline">
+          <span>Day2 の日付</span>
+          <input type="date" id="day2Date" />
+        </label>
+      </div>
+      <div id="sessionList" class="session-list"></div>
+      <button id="addSession" class="btn btn-primary">＋ セッション追加</button>
+    </section>
+
+    <!-- ④ 担当設定 -->
+    <section class="panel" id="panel-assign" hidden>
+      <div class="panel-head">
+        <h2>④ 担当設定</h2>
+        <p class="desc">各セッションで、各メンバーが担当する役割を設定します。セルをクリックして編集してください。
+          1つのセッション内で時間帯ごとに役割を切り替えることもできます。</p>
+      </div>
+      <div class="table-wrap" id="assignTableWrap"></div>
+    </section>
+
+    <!-- ⑤ 表示 -->
+    <section class="panel" id="panel-display" hidden>
+      <div class="panel-head no-print">
+        <h2>⑤ 表示</h2>
+        <div class="panel-actions">
+          <button id="exportCsv" class="btn">CSV エクスポート</button>
+          <button id="exportJson" class="btn">JSON エクスポート</button>
+          <button id="importJson" class="btn">JSON インポート</button>
+          <button id="printBtn" class="btn btn-primary">印刷</button>
+          <input type="file" id="importFile" accept="application/json" hidden />
+        </div>
+      </div>
+      <div id="displayArea" class="display-area"></div>
     </section>
   </main>
 
-  <!-- セル編集モーダル -->
-  <div id="cellModal" class="modal" hidden>
+  <!-- 担当編集モーダル -->
+  <div id="assignModal" class="modal" hidden>
     <div class="modal-card">
-      <h3 id="cellModalTitle">シフト入力</h3>
-      <div class="preset-grid" id="presetGrid"></div>
-      <label class="field">
-        <span>自由入力（例: 9:00-18:00）</span>
-        <input type="text" id="cellInput" placeholder="シフト内容" />
-      </label>
+      <h3 id="assignModalTitle">担当の設定</h3>
+      <p class="desc" id="assignModalSub"></p>
+      <div id="segmentList" class="segment-list"></div>
+      <button id="addSegment" class="btn btn-ghost small">＋ 時間帯を分けて役割を追加</button>
       <div class="modal-actions">
-        <button id="cellClear" class="btn btn-ghost">クリア</button>
+        <button id="assignClear" class="btn btn-ghost">すべてクリア</button>
         <div class="spacer"></div>
-        <button id="cellCancel" class="btn btn-ghost">キャンセル</button>
-        <button id="cellSave" class="btn btn-primary">保存</button>
+        <button id="assignCancel" class="btn btn-ghost">キャンセル</button>
+        <button id="assignSave" class="btn btn-primary">保存</button>
       </div>
     </div>
   </div>
 
-  <footer class="app-footer">
+  <footer class="app-footer no-print">
     <span>データはこのブラウザ内（localStorage）に保存されます。バックアップは JSON エクスポートをご利用ください。</span>
   </footer>
 

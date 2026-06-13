@@ -1,49 +1,36 @@
 /* ============================================================
-   Staff Timetable - シフト表 (素のHTML/CSS/JS / GitHub Pages 用)
-   データはブラウザの localStorage に保存します。
+   香盤表メーカー (Staff Timetable)
+   カンファレンス運営スタッフの香盤表を作成する静的Webアプリ。
+   - 5タブ構成: メンバー / 役割 / タイムテーブル / 担当 / 表示
+   - データは localStorage に自動保存
+   - CSV / JSON エクスポート、JSON インポート、印刷に対応
    ============================================================ */
 
 (() => {
   "use strict";
 
-  const STORAGE_KEY = "staff-timetable:v1";
-  const DAY_LABELS = ["月", "火", "水", "木", "金", "土", "日"];
+  const STORAGE_KEY = "kouban:v1";
 
-  // シフトのプリセット（ラベルと色）
-  const PRESETS = [
-    { label: "早番", value: "早 8:00-17:00", color: "#dbeafe", text: "#1e40af" },
-    { label: "遅番", value: "遅 12:00-21:00", color: "#fef3c7", text: "#92400e" },
-    { label: "日勤", value: "日 9:00-18:00", color: "#dcfce7", text: "#166534" },
-    { label: "夜勤", value: "夜 21:00-翌6:00", color: "#ede9fe", text: "#5b21b6" },
-    { label: "休み", value: "休", color: "#f1f5f9", text: "#64748b" },
-    { label: "有休", value: "有休", color: "#fce7f3", text: "#9d174d" },
+  // 役割の自動カラーパレット（淡色）
+  const PALETTE = [
+    "#dbeafe", "#dcfce7", "#fef3c7", "#ede9fe", "#fce7f3",
+    "#ffedd5", "#cffafe", "#fee2e2", "#e0e7ff", "#d1fae5",
   ];
 
-  // ---------- 状態 ----------
-  let state = loadState();
-  let weekOffset = 0; // 今週からの週数オフセット
-  let editMode = false;
-  let activeCell = null; // { staffId, dayIndex }
-
-  // ---------- DOM ----------
   const el = (id) => document.getElementById(id);
-  const tableHead = el("tableHead");
-  const tableBody = el("tableBody");
-  const weekLabel = el("weekLabel");
-  const legendList = el("legendList");
+  const uid = (p = "id") => p + "-" + Math.random().toString(36).slice(2, 9);
 
   // ============================================================
-  // 永続化
+  // 状態 / 永続化
   // ============================================================
   function defaultState() {
     return {
-      staff: [
-        { id: uid(), name: "山田 太郎" },
-        { id: uid(), name: "佐藤 花子" },
-        { id: uid(), name: "鈴木 一郎" },
-      ],
-      // shifts[weekKey][staffId][dayIndex] = "シフト文字列"
-      shifts: {},
+      meta: { title: "", day1Date: "", day2Date: "" },
+      members: [],
+      roles: [],
+      sessions: [],
+      // assignments[sessionId][memberId] = [ { roleId, start, end } ]
+      assignments: {},
     };
   }
 
@@ -51,285 +38,492 @@
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return defaultState();
-      const parsed = JSON.parse(raw);
-      if (!parsed.staff || !parsed.shifts) return defaultState();
-      return parsed;
+      const p = JSON.parse(raw);
+      return Object.assign(defaultState(), p);
     } catch (e) {
-      console.warn("保存データの読み込みに失敗しました。初期データを使用します。", e);
+      console.warn("保存データの読み込みに失敗。初期化します。", e);
       return defaultState();
     }
   }
 
-  function saveState() {
+  function save() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }
 
-  function uid() {
-    return "id-" + Math.random().toString(36).slice(2, 9);
-  }
+  let state = loadState();
 
   // ============================================================
-  // 週の計算
+  // 参照ヘルパー
   // ============================================================
-  function startOfWeek(date) {
-    // 月曜始まり
-    const d = new Date(date);
-    d.setHours(0, 0, 0, 0);
-    const day = (d.getDay() + 6) % 7; // 月=0 ... 日=6
-    d.setDate(d.getDate() - day);
-    return d;
-  }
+  const getRole = (id) => state.roles.find((r) => r.id === id);
+  const getMember = (id) => state.members.find((m) => m.id === id);
 
-  function currentWeekStart() {
-    const base = startOfWeek(new Date());
-    base.setDate(base.getDate() + weekOffset * 7);
-    return base;
-  }
-
-  function weekKey(weekStart) {
-    return formatDate(weekStart, "-");
-  }
-
-  function formatDate(date, sep = "/") {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const d = String(date.getDate()).padStart(2, "0");
-    return [y, m, d].join(sep);
-  }
-
-  function weekDates(weekStart) {
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(weekStart);
-      d.setDate(d.getDate() + i);
-      return d;
+  function sortedSessions() {
+    return [...state.sessions].sort((a, b) => {
+      if (a.day !== b.day) return a.day - b.day;
+      return (a.start || "").localeCompare(b.start || "");
     });
   }
 
-  // ============================================================
-  // 描画
-  // ============================================================
-  function render() {
-    const weekStart = currentWeekStart();
-    const dates = weekDates(weekStart);
-    const wk = weekKey(weekStart);
-
-    // 週ラベル
-    const end = dates[6];
-    weekLabel.textContent = `${formatDate(weekStart)} 〜 ${formatDate(end)}`;
-
-    // ヘッダー
-    tableHead.innerHTML = "";
-    const headRow = document.createElement("tr");
-    headRow.appendChild(th("スタッフ", "staff-name"));
-    dates.forEach((d, i) => {
-      const cls = i === 5 ? "day-sat" : i === 6 ? "day-sun" : "";
-      const cell = th(`${DAY_LABELS[i]}\n${d.getMonth() + 1}/${d.getDate()}`, cls);
-      cell.style.whiteSpace = "pre-line";
-      headRow.appendChild(cell);
-    });
-    tableHead.appendChild(headRow);
-
-    // ボディ
-    tableBody.innerHTML = "";
-    if (state.staff.length === 0) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 8;
-      td.textContent = "スタッフがいません。編集モードで追加してください。";
-      td.style.color = "var(--muted)";
-      td.style.padding = "20px";
-      tr.appendChild(td);
-      tableBody.appendChild(tr);
-    }
-
-    state.staff.forEach((person) => {
-      const tr = document.createElement("tr");
-
-      // 名前セル
-      const nameTd = document.createElement("td");
-      nameTd.className = "staff-name";
-      const nameText = document.createElement("span");
-      nameText.className = "name-text";
-      nameText.textContent = person.name;
-      nameText.addEventListener("click", () => {
-        if (editMode) renameStaff(person);
-      });
-      const delBtn = document.createElement("button");
-      delBtn.className = "del-staff";
-      delBtn.textContent = "✕";
-      delBtn.title = "このスタッフを削除";
-      delBtn.addEventListener("click", () => removeStaff(person));
-      nameTd.appendChild(nameText);
-      nameTd.appendChild(delBtn);
-      tr.appendChild(nameTd);
-
-      // シフトセル
-      dates.forEach((d, i) => {
-        const td = document.createElement("td");
-        const cls = i === 5 ? "day-sat" : i === 6 ? "day-sun" : "";
-        td.className = ("shift-cell " + cls).trim();
-        const value = getShift(wk, person.id, i);
-        if (value) {
-          const chip = document.createElement("span");
-          chip.className = "shift-chip";
-          const preset = PRESETS.find((p) => p.value === value);
-          if (preset) {
-            chip.style.background = preset.color;
-            chip.style.color = preset.text;
-          }
-          chip.textContent = value;
-          td.appendChild(chip);
-        }
-        td.addEventListener("click", () => {
-          if (editMode) openCellModal(person, i);
-        });
-        tr.appendChild(td);
-      });
-
-      tableBody.appendChild(tr);
-    });
-
-    renderLegend();
+  function getAssignment(sessionId, memberId) {
+    return state.assignments?.[sessionId]?.[memberId] || [];
   }
 
-  function th(text, className) {
-    const cell = document.createElement("th");
-    cell.textContent = text;
-    if (className) cell.className = className;
-    return cell;
-  }
-
-  function renderLegend() {
-    legendList.innerHTML = "";
-    PRESETS.forEach((p) => {
-      const li = document.createElement("li");
-      const sw = document.createElement("span");
-      sw.className = "legend-swatch";
-      sw.style.background = p.color;
-      const label = document.createElement("span");
-      label.textContent = `${p.label}（${p.value}）`;
-      li.appendChild(sw);
-      li.appendChild(label);
-      legendList.appendChild(li);
-    });
-  }
-
-  // ============================================================
-  // シフトデータ操作
-  // ============================================================
-  function getShift(wk, staffId, dayIndex) {
-    return state.shifts?.[wk]?.[staffId]?.[dayIndex] || "";
-  }
-
-  function setShift(wk, staffId, dayIndex, value) {
-    if (!state.shifts[wk]) state.shifts[wk] = {};
-    if (!state.shifts[wk][staffId]) state.shifts[wk][staffId] = {};
-    if (value) {
-      state.shifts[wk][staffId][dayIndex] = value;
+  function setAssignment(sessionId, memberId, segments) {
+    if (!state.assignments[sessionId]) state.assignments[sessionId] = {};
+    if (segments && segments.length) {
+      state.assignments[sessionId][memberId] = segments;
     } else {
-      delete state.shifts[wk][staffId][dayIndex];
+      delete state.assignments[sessionId][memberId];
+      if (Object.keys(state.assignments[sessionId]).length === 0) {
+        delete state.assignments[sessionId];
+      }
     }
-    saveState();
+    save();
   }
 
-  // ============================================================
-  // スタッフ操作
-  // ============================================================
-  function addStaff() {
-    const name = prompt("スタッフ名を入力してください");
-    if (name && name.trim()) {
-      state.staff.push({ id: uid(), name: name.trim() });
-      saveState();
-      render();
-    }
-  }
-
-  function renameStaff(person) {
-    const name = prompt("スタッフ名を編集", person.name);
-    if (name && name.trim()) {
-      person.name = name.trim();
-      saveState();
-      render();
-    }
-  }
-
-  function removeStaff(person) {
-    if (!confirm(`「${person.name}」を削除しますか？\n（このスタッフの全シフトデータも削除されます）`)) return;
-    state.staff = state.staff.filter((s) => s.id !== person.id);
-    // 全週のシフトから削除
-    Object.values(state.shifts).forEach((week) => delete week[person.id]);
-    saveState();
-    render();
-  }
+  function fmtTime(t) { return t || ""; }
+  function timeRange(s, e) { return `${fmtTime(s)}–${fmtTime(e)}`; }
 
   // ============================================================
-  // セル編集モーダル
+  // タブ
   // ============================================================
-  const cellModal = el("cellModal");
-  const presetGrid = el("presetGrid");
-  const cellInput = el("cellInput");
-  const cellModalTitle = el("cellModalTitle");
-
-  function buildPresetButtons() {
-    presetGrid.innerHTML = "";
-    PRESETS.forEach((p) => {
-      const btn = document.createElement("button");
-      btn.className = "preset-btn";
-      btn.textContent = p.label;
-      btn.style.background = p.color;
-      btn.style.color = p.text;
-      btn.addEventListener("click", () => {
-        cellInput.value = p.value;
+  function initTabs() {
+    el("tabs").addEventListener("click", (e) => {
+      const btn = e.target.closest(".tab");
+      if (!btn) return;
+      const tab = btn.dataset.tab;
+      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === btn));
+      document.querySelectorAll(".panel").forEach((p) => {
+        p.hidden = p.id !== "panel-" + tab;
       });
-      presetGrid.appendChild(btn);
+      renderAll();
     });
   }
 
-  function openCellModal(person, dayIndex) {
-    const weekStart = currentWeekStart();
-    const wk = weekKey(weekStart);
-    const date = weekDates(weekStart)[dayIndex];
-    activeCell = { wk, staffId: person.id, dayIndex };
-    cellModalTitle.textContent = `${person.name} ／ ${DAY_LABELS[dayIndex]} ${date.getMonth() + 1}/${date.getDate()}`;
-    cellInput.value = getShift(wk, person.id, dayIndex);
-    cellModal.hidden = false;
-    cellInput.focus();
+  // ============================================================
+  // ① メンバー設定
+  // ============================================================
+  function renderMembers() {
+    const list = el("memberList");
+    list.innerHTML = "";
+    if (state.members.length === 0) {
+      list.innerHTML = '<p class="empty-hint">メンバーがまだいません。「＋ メンバー追加」で登録してください。</p>';
+      return;
+    }
+    state.members.forEach((m, i) => {
+      const row = document.createElement("div");
+      row.className = "row-item";
+      row.innerHTML = `
+        <span class="idx">${i + 1}</span>
+        <input type="text" value="" placeholder="氏名" />
+        <button class="icon-btn" data-act="up" title="上へ" ${i === 0 ? "disabled" : ""}>↑</button>
+        <button class="icon-btn" data-act="down" title="下へ" ${i === state.members.length - 1 ? "disabled" : ""}>↓</button>
+        <button class="icon-btn danger" data-act="del" title="削除">✕</button>`;
+      const input = row.querySelector("input");
+      input.value = m.name;
+      input.addEventListener("input", () => { m.name = input.value; save(); });
+      row.querySelector('[data-act="up"]').addEventListener("click", () => moveMember(i, -1));
+      row.querySelector('[data-act="down"]').addEventListener("click", () => moveMember(i, 1));
+      row.querySelector('[data-act="del"]').addEventListener("click", () => removeMember(m));
+      list.appendChild(row);
+    });
   }
 
-  function closeCellModal() {
-    cellModal.hidden = true;
-    activeCell = null;
+  function moveMember(i, dir) {
+    const j = i + dir;
+    if (j < 0 || j >= state.members.length) return;
+    [state.members[i], state.members[j]] = [state.members[j], state.members[i]];
+    save();
+    renderMembers();
   }
 
-  function saveCell() {
-    if (!activeCell) return;
-    setShift(activeCell.wk, activeCell.staffId, activeCell.dayIndex, cellInput.value.trim());
-    closeCellModal();
-    render();
+  function removeMember(m) {
+    if (!confirm(`「${m.name || "(無名)"}」を削除しますか？\nこのメンバーの担当データも削除されます。`)) return;
+    state.members = state.members.filter((x) => x.id !== m.id);
+    Object.values(state.assignments).forEach((sess) => delete sess[m.id]);
+    save();
+    renderAll();
   }
 
   // ============================================================
-  // インポート / エクスポート
+  // ② 役割設定
   // ============================================================
-  function exportJSON() {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `staff-timetable-${formatDate(new Date(), "")}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  function renderRoles() {
+    const list = el("roleList");
+    list.innerHTML = "";
+    if (state.roles.length === 0) {
+      list.innerHTML = '<p class="empty-hint">役割がまだありません。「＋ 役割追加」で登録してください。</p>';
+      return;
+    }
+    state.roles.forEach((r, i) => {
+      const row = document.createElement("div");
+      row.className = "row-item";
+      row.innerHTML = `
+        <span class="idx">${i + 1}</span>
+        <input type="text" placeholder="役割名（例: 司会）" />
+        <input type="color" title="表示色" />
+        <button class="icon-btn danger" data-act="del" title="削除">✕</button>`;
+      const [nameInput, colorInput] = row.querySelectorAll("input");
+      nameInput.value = r.name;
+      colorInput.value = r.color;
+      nameInput.addEventListener("input", () => { r.name = nameInput.value; save(); });
+      colorInput.addEventListener("input", () => { r.color = colorInput.value; save(); });
+      row.querySelector('[data-act="del"]').addEventListener("click", () => removeRole(r));
+      list.appendChild(row);
+    });
   }
 
-  function importJSON(file) {
+  function removeRole(r) {
+    if (!confirm(`役割「${r.name || "(無名)"}」を削除しますか？\nこの役割を使っている担当からも取り除かれます。`)) return;
+    state.roles = state.roles.filter((x) => x.id !== r.id);
+    Object.values(state.assignments).forEach((sess) => {
+      Object.keys(sess).forEach((mid) => {
+        sess[mid] = sess[mid].filter((seg) => seg.roleId !== r.id);
+        if (sess[mid].length === 0) delete sess[mid];
+      });
+    });
+    save();
+    renderAll();
+  }
+
+  // ============================================================
+  // ③ タイムテーブル設定
+  // ============================================================
+  function renderSessions() {
+    el("confTitle").value = state.meta.title || "";
+    el("day1Date").value = state.meta.day1Date || "";
+    el("day2Date").value = state.meta.day2Date || "";
+
+    const wrap = el("sessionList");
+    wrap.innerHTML = "";
+    [1, 2].forEach((day) => {
+      const group = document.createElement("div");
+      group.className = "session-day-group";
+      const dateLabel = day === 1 ? state.meta.day1Date : state.meta.day2Date;
+      group.innerHTML = `<h3>Day${day}${dateLabel ? `（${dateLabel}）` : ""}</h3>`;
+      const daySessions = sortedSessions().filter((s) => s.day === day);
+      if (daySessions.length === 0) {
+        const p = document.createElement("p");
+        p.className = "empty-hint";
+        p.textContent = "セッション未登録";
+        group.appendChild(p);
+      }
+      daySessions.forEach((s) => group.appendChild(sessionRow(s)));
+      wrap.appendChild(group);
+    });
+  }
+
+  function sessionRow(s) {
+    const row = document.createElement("div");
+    row.className = "session-item";
+    row.innerHTML = `
+      <label class="mini">日<select class="s-day">
+        <option value="1">Day1</option><option value="2">Day2</option>
+      </select></label>
+      <input type="text" class="s-title" placeholder="セッション名（例: 基調講演）" />
+      <label class="mini">開始<input type="time" class="s-start" /></label>
+      <span class="s-sep">〜</span>
+      <label class="mini">終了<input type="time" class="s-end" /></label>
+      <button class="icon-btn danger" data-act="del" title="削除">✕</button>`;
+    row.querySelector(".s-day").value = String(s.day);
+    row.querySelector(".s-title").value = s.title || "";
+    row.querySelector(".s-start").value = s.start || "";
+    row.querySelector(".s-end").value = s.end || "";
+    row.querySelector(".s-day").addEventListener("change", (e) => { s.day = Number(e.target.value); save(); renderSessions(); });
+    row.querySelector(".s-title").addEventListener("input", (e) => { s.title = e.target.value; save(); });
+    row.querySelector(".s-start").addEventListener("change", (e) => { s.start = e.target.value; save(); renderSessions(); });
+    row.querySelector(".s-end").addEventListener("change", (e) => { s.end = e.target.value; save(); });
+    row.querySelector('[data-act="del"]').addEventListener("click", () => {
+      if (!confirm("このセッションを削除しますか？担当データも削除されます。")) return;
+      state.sessions = state.sessions.filter((x) => x.id !== s.id);
+      delete state.assignments[s.id];
+      save();
+      renderAll();
+    });
+    return row;
+  }
+
+  // ============================================================
+  // ④ 担当設定
+  // ============================================================
+  function renderAssign() {
+    const wrap = el("assignTableWrap");
+    wrap.innerHTML = "";
+
+    if (state.members.length === 0 || state.sessions.length === 0) {
+      wrap.innerHTML = '<p class="empty-hint">先に「メンバー設定」と「タイムテーブル設定」を済ませてください。</p>';
+      return;
+    }
+
+    const table = document.createElement("table");
+    table.className = "grid";
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    headRow.innerHTML = '<th class="time-col">セッション</th>';
+    state.members.forEach((m) => {
+      const th = document.createElement("th");
+      th.textContent = m.name || "(無名)";
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    [1, 2].forEach((day) => {
+      const daySessions = sortedSessions().filter((s) => s.day === day);
+      if (daySessions.length === 0) return;
+      const dr = document.createElement("tr");
+      dr.className = "day-row";
+      const dateLabel = day === 1 ? state.meta.day1Date : state.meta.day2Date;
+      dr.innerHTML = `<td colspan="${state.members.length + 1}">Day${day}${dateLabel ? `（${dateLabel}）` : ""}</td>`;
+      tbody.appendChild(dr);
+
+      daySessions.forEach((s) => {
+        const tr = document.createElement("tr");
+        const timeTd = document.createElement("td");
+        timeTd.className = "time-col";
+        timeTd.innerHTML = `<div class="s-name">${escapeHtml(s.title || "(無題)")}</div><div class="s-time">${timeRange(s.start, s.end)}</div>`;
+        tr.appendChild(timeTd);
+
+        state.members.forEach((m) => {
+          const td = document.createElement("td");
+          td.className = "assign-cell";
+          renderCellContent(td, getAssignment(s.id, m.id));
+          td.addEventListener("click", () => openAssignModal(s, m));
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+  }
+
+  function renderCellContent(td, segments) {
+    td.innerHTML = "";
+    if (!segments.length) {
+      td.classList.add("empty");
+      td.textContent = "—";
+      return;
+    }
+    td.classList.remove("empty");
+    const stack = document.createElement("div");
+    stack.className = "chip-stack";
+    segments.forEach((seg) => {
+      const role = getRole(seg.roleId);
+      const chip = document.createElement("span");
+      chip.className = "role-chip";
+      if (role) chip.style.background = role.color;
+      chip.textContent = role ? role.name : "(不明な役割)";
+      if (seg.start || seg.end) {
+        const t = document.createElement("span");
+        t.className = "seg-time";
+        t.textContent = timeRange(seg.start, seg.end);
+        chip.appendChild(t);
+      }
+      stack.appendChild(chip);
+    });
+    td.appendChild(stack);
+  }
+
+  // ---------- 担当編集モーダル ----------
+  let modalCtx = null; // { session, member }
+
+  function openAssignModal(session, member) {
+    if (state.roles.length === 0) {
+      alert("先に「役割設定」で役割を登録してください。");
+      return;
+    }
+    modalCtx = { session, member };
+    el("assignModalTitle").textContent = `${member.name || "(無名)"} の担当`;
+    el("assignModalSub").textContent = `${session.title || "(無題)"} ／ Day${session.day} ${timeRange(session.start, session.end)}`;
+
+    const existing = getAssignment(session.id, member.id);
+    const segs = existing.length ? existing.map((s) => ({ ...s })) : [{ roleId: "", start: "", end: "" }];
+    renderSegments(segs);
+    el("assignModal").hidden = false;
+  }
+
+  function renderSegments(segs) {
+    const list = el("segmentList");
+    list.innerHTML = "";
+    segs.forEach((seg, i) => list.appendChild(segmentRow(seg, i, segs)));
+    // 単一セグメントなら「時間帯」は任意（空＝セッション全体）という案内
+  }
+
+  function segmentRow(seg, i, segs) {
+    const row = document.createElement("div");
+    row.className = "segment-row";
+    const opts = state.roles.map((r) => `<option value="${r.id}">${escapeHtml(r.name || "(無名)")}</option>`).join("");
+    row.innerHTML = `
+      <select><option value="">役割を選択</option>${opts}</select>
+      <input type="time" class="seg-start" title="開始（空欄可）" />
+      <span class="seg-dash">〜</span>
+      <input type="time" class="seg-end" title="終了（空欄可）" />
+      <button class="icon-btn danger" data-act="del" title="この行を削除">✕</button>`;
+    const sel = row.querySelector("select");
+    const startI = row.querySelector(".seg-start");
+    const endI = row.querySelector(".seg-end");
+    sel.value = seg.roleId || "";
+    startI.value = seg.start || "";
+    endI.value = seg.end || "";
+    sel.addEventListener("change", () => { seg.roleId = sel.value; });
+    startI.addEventListener("change", () => { seg.start = startI.value; });
+    endI.addEventListener("change", () => { seg.end = endI.value; });
+    row.querySelector('[data-act="del"]').addEventListener("click", () => {
+      const idx = segs.indexOf(seg);
+      if (idx >= 0) segs.splice(idx, 1);
+      if (segs.length === 0) segs.push({ roleId: "", start: "", end: "" });
+      renderSegments(segs);
+    });
+    // 現在の編集対象配列を保持
+    row._segs = segs;
+    return row;
+  }
+
+  function currentSegs() {
+    const first = el("segmentList").firstElementChild;
+    return first ? first._segs : [];
+  }
+
+  function closeAssignModal() {
+    el("assignModal").hidden = true;
+    modalCtx = null;
+  }
+
+  function saveAssign() {
+    if (!modalCtx) return;
+    const segs = currentSegs().filter((s) => s.roleId); // 役割未選択の行は無視
+    setAssignment(modalCtx.session.id, modalCtx.member.id, segs);
+    closeAssignModal();
+    renderAll();
+  }
+
+  // ============================================================
+  // ⑤ 表示
+  // ============================================================
+  function renderDisplay() {
+    const area = el("displayArea");
+    area.innerHTML = "";
+
+    if (state.meta.title) {
+      const h = document.createElement("h2");
+      h.className = "display-title";
+      h.textContent = state.meta.title;
+      area.appendChild(h);
+    }
+
+    // 凡例
+    if (state.roles.length) {
+      const legend = document.createElement("div");
+      legend.className = "legend";
+      state.roles.forEach((r) => {
+        const item = document.createElement("span");
+        item.className = "item";
+        item.innerHTML = `<span class="swatch" style="background:${r.color}"></span>${escapeHtml(r.name || "(無名)")}`;
+        legend.appendChild(item);
+      });
+      area.appendChild(legend);
+    }
+
+    if (state.members.length === 0 || state.sessions.length === 0) {
+      const p = document.createElement("p");
+      p.className = "empty-hint";
+      p.textContent = "メンバーとタイムテーブルを設定すると、ここに香盤表が表示されます。";
+      area.appendChild(p);
+      return;
+    }
+
+    [1, 2].forEach((day) => {
+      const daySessions = sortedSessions().filter((s) => s.day === day);
+      if (daySessions.length === 0) return;
+      const block = document.createElement("div");
+      block.className = "display-day-block";
+      const dateLabel = day === 1 ? state.meta.day1Date : state.meta.day2Date;
+      block.innerHTML = `<h3>Day${day}${dateLabel ? `（${dateLabel}）` : ""}</h3>`;
+
+      const wrap = document.createElement("div");
+      wrap.className = "table-wrap";
+      const table = document.createElement("table");
+      table.className = "grid";
+
+      const thead = document.createElement("thead");
+      const hr = document.createElement("tr");
+      hr.innerHTML = '<th class="time-col">時間 / セッション</th>';
+      state.members.forEach((m) => {
+        const th = document.createElement("th");
+        th.textContent = m.name || "(無名)";
+        hr.appendChild(th);
+      });
+      thead.appendChild(hr);
+      table.appendChild(thead);
+
+      const tbody = document.createElement("tbody");
+      daySessions.forEach((s) => {
+        const tr = document.createElement("tr");
+        const timeTd = document.createElement("td");
+        timeTd.className = "time-col";
+        timeTd.innerHTML = `<div class="s-time">${timeRange(s.start, s.end)}</div><div class="s-name">${escapeHtml(s.title || "(無題)")}</div>`;
+        tr.appendChild(timeTd);
+        state.members.forEach((m) => {
+          const td = document.createElement("td");
+          renderCellContent(td, getAssignment(s.id, m.id));
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      block.appendChild(wrap);
+      area.appendChild(block);
+    });
+  }
+
+  // ============================================================
+  // エクスポート / インポート
+  // ============================================================
+  function segmentsToText(segments) {
+    return segments.map((seg) => {
+      const role = getRole(seg.roleId);
+      const name = role ? role.name : "(不明)";
+      return (seg.start || seg.end) ? `${name}(${timeRange(seg.start, seg.end)})` : name;
+    }).join(" / ");
+  }
+
+  function exportCsv() {
+    const rows = [];
+    rows.push(["日", "開始", "終了", "セッション", ...state.members.map((m) => m.name || "(無名)")]);
+    [1, 2].forEach((day) => {
+      sortedSessions().filter((s) => s.day === day).forEach((s) => {
+        const row = [`Day${day}`, s.start || "", s.end || "", s.title || ""];
+        state.members.forEach((m) => row.push(segmentsToText(getAssignment(s.id, m.id))));
+        rows.push(row);
+      });
+    });
+    const csv = rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+    // Excel での文字化け防止に UTF-8 BOM を付与
+    download("﻿" + csv, csvFileName("csv"), "text/csv;charset=utf-8");
+  }
+
+  function csvCell(v) {
+    const s = String(v ?? "");
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function exportJson() {
+    download(JSON.stringify(state, null, 2), csvFileName("json"), "application/json");
+  }
+
+  function importJson(file) {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(reader.result);
-        if (!parsed.staff || !parsed.shifts) throw new Error("形式が不正です");
-        state = parsed;
-        saveState();
-        render();
+        const p = JSON.parse(reader.result);
+        if (!p.members || !p.sessions || !p.roles) throw new Error("形式が不正です");
+        state = Object.assign(defaultState(), p);
+        save();
+        renderAll();
         alert("インポートが完了しました。");
       } catch (e) {
         alert("インポートに失敗しました: " + e.message);
@@ -338,63 +532,96 @@
     reader.readAsText(file);
   }
 
-  function resetAll() {
-    if (!confirm("全データをリセットして初期状態に戻しますか？この操作は元に戻せません。")) return;
-    state = defaultState();
-    saveState();
-    render();
+  function csvFileName(ext) {
+    const base = (state.meta.title || "kouban").replace(/[\\/:*?"<>|]/g, "_");
+    return `${base}.${ext}`;
+  }
+
+  function download(content, filename, type) {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   // ============================================================
-  // イベント登録
+  // ユーティリティ
   // ============================================================
-  function setEditMode(on) {
-    editMode = on;
-    document.body.classList.toggle("edit-mode", on);
-    el("editControls").hidden = !on;
-    el("editToggle").checked = on;
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
   }
 
+  function renderAll() {
+    renderMembers();
+    renderRoles();
+    renderSessions();
+    renderAssign();
+    renderDisplay();
+  }
+
+  // ============================================================
+  // 初期化 / イベント
+  // ============================================================
   function init() {
-    buildPresetButtons();
-    render();
+    initTabs();
 
-    // 週ナビ
-    el("prevWeek").addEventListener("click", () => { weekOffset--; render(); });
-    el("nextWeek").addEventListener("click", () => { weekOffset++; render(); });
-    el("todayBtn").addEventListener("click", () => { weekOffset = 0; render(); });
-
-    // 編集モード
-    el("editToggle").addEventListener("change", (e) => setEditMode(e.target.checked));
-    el("addStaffBtn").addEventListener("click", addStaff);
-
-    // メニュー
-    const menuPanel = el("menuPanel");
-    el("menuBtn").addEventListener("click", (e) => {
-      e.stopPropagation();
-      menuPanel.hidden = !menuPanel.hidden;
+    // メンバー
+    el("addMember").addEventListener("click", () => {
+      state.members.push({ id: uid("m"), name: "" });
+      save();
+      renderMembers();
     });
-    document.addEventListener("click", () => { menuPanel.hidden = true; });
-    menuPanel.addEventListener("click", (e) => e.stopPropagation());
 
-    el("exportBtn").addEventListener("click", () => { exportJSON(); menuPanel.hidden = true; });
-    el("importBtn").addEventListener("click", () => { el("importFile").click(); menuPanel.hidden = true; });
+    // 役割
+    el("addRole").addEventListener("click", () => {
+      const color = PALETTE[state.roles.length % PALETTE.length];
+      state.roles.push({ id: uid("r"), name: "", color });
+      save();
+      renderRoles();
+    });
+
+    // タイムテーブル
+    el("confTitle").addEventListener("input", (e) => { state.meta.title = e.target.value; save(); });
+    el("day1Date").addEventListener("change", (e) => { state.meta.day1Date = e.target.value; save(); renderSessions(); });
+    el("day2Date").addEventListener("change", (e) => { state.meta.day2Date = e.target.value; save(); renderSessions(); });
+    el("addSession").addEventListener("click", () => {
+      state.sessions.push({ id: uid("s"), day: 1, title: "", start: "09:00", end: "10:00" });
+      save();
+      renderSessions();
+    });
+
+    // 担当モーダル
+    el("addSegment").addEventListener("click", () => {
+      const segs = currentSegs();
+      segs.push({ roleId: "", start: "", end: "" });
+      renderSegments(segs);
+    });
+    el("assignSave").addEventListener("click", saveAssign);
+    el("assignCancel").addEventListener("click", closeAssignModal);
+    el("assignClear").addEventListener("click", () => {
+      const segs = [{ roleId: "", start: "", end: "" }];
+      renderSegments(segs);
+    });
+    el("assignModal").addEventListener("click", (e) => {
+      if (e.target === el("assignModal")) closeAssignModal();
+    });
+
+    // 表示タブ：エクスポート/インポート
+    el("exportCsv").addEventListener("click", exportCsv);
+    el("exportJson").addEventListener("click", exportJson);
+    el("importJson").addEventListener("click", () => el("importFile").click());
     el("importFile").addEventListener("change", (e) => {
-      if (e.target.files[0]) importJSON(e.target.files[0]);
+      if (e.target.files[0]) importJson(e.target.files[0]);
       e.target.value = "";
     });
-    el("printBtn").addEventListener("click", () => { menuPanel.hidden = true; window.print(); });
-    el("resetBtn").addEventListener("click", () => { resetAll(); menuPanel.hidden = true; });
+    el("printBtn").addEventListener("click", () => window.print());
 
-    // セルモーダル
-    el("cellSave").addEventListener("click", saveCell);
-    el("cellCancel").addEventListener("click", closeCellModal);
-    el("cellClear").addEventListener("click", () => { cellInput.value = ""; });
-    cellModal.addEventListener("click", (e) => { if (e.target === cellModal) closeCellModal(); });
-    cellInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") saveCell();
-      if (e.key === "Escape") closeCellModal();
-    });
+    renderAll();
   }
 
   document.addEventListener("DOMContentLoaded", init);
