@@ -12,7 +12,7 @@
 2. **役割設定** — 担当する役割（司会・受付・撮影 など）を登録。色を指定可能
 3. **タイムテーブル設定** — イベント名・各日の日付、セッション（日 / 開始 / 終了 / セッション名）を登録。
    別サービスが出力する**イベント JSON からメンバー・タイムテーブルを一括取り込み**も可能
-   （`committeeMembers` → メンバー、`day1Sessions` / `day2Sessions` の `startTime` / `endTime` / `title` → セッション。
+   （`committeeChair`（委員長）＋ `committeeMembers` → メンバー、`day1Sessions` / `day2Sessions` の `startTime` / `endTime` / `title` → セッション。
    `eventName`・`startDate`・`endDate` も取り込み。取り込み時は既存のメンバー・タイムテーブル・担当設定を置き換え、役割は保持）
 4. **担当設定** — セッション × メンバーのセルに役割を割り当て。
    1 セッション内で時間帯ごとに役割を切り替えることも可能（例: 11:00–11:20 撮影 / 11:20–12:00 サポート）

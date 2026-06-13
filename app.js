@@ -541,11 +541,20 @@
     reader.onload = () => {
       try {
         const p = JSON.parse(reader.result);
-        const members = Array.isArray(p.committeeMembers) ? p.committeeMembers : [];
+        // 委員長(committeeChair)を先頭に、続けて委員(committeeMembers)を取り込む。
+        // 既に committeeMembers に委員長が含まれている場合は重複させない。
+        const memberNames = Array.isArray(p.committeeMembers) ? p.committeeMembers : [];
+        const chair = p.committeeChair ? String(p.committeeChair).trim() : "";
+        const members = [];
+        if (chair) members.push(chair);
+        memberNames.forEach((name) => {
+          const n = String(name).trim();
+          if (n && n !== chair) members.push(n);
+        });
         const d1 = Array.isArray(p.day1Sessions) ? p.day1Sessions : [];
         const d2 = Array.isArray(p.day2Sessions) ? p.day2Sessions : [];
         if (members.length === 0 && d1.length === 0 && d2.length === 0) {
-          throw new Error("committeeMembers / day1Sessions / day2Sessions が見つかりません");
+          throw new Error("committeeChair / committeeMembers / day1Sessions / day2Sessions が見つかりません");
         }
         const ok = confirm(
           `イベントデータを取り込みます。\n` +
