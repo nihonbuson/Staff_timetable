@@ -532,6 +532,81 @@
     reader.readAsText(file);
   }
 
+  // ---------- 別サービスのイベントJSON取り込み ----------
+  // 想定フォーマット例: { eventName, startDate, endDate,
+  //   committeeMembers: ["氏名", ...],
+  //   day1Sessions: [{ startTime, endTime, title, ... }], day2Sessions: [...] }
+  function importEventData(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const p = JSON.parse(reader.result);
+        const members = Array.isArray(p.committeeMembers) ? p.committeeMembers : [];
+        const d1 = Array.isArray(p.day1Sessions) ? p.day1Sessions : [];
+        const d2 = Array.isArray(p.day2Sessions) ? p.day2Sessions : [];
+        if (members.length === 0 && d1.length === 0 && d2.length === 0) {
+          throw new Error("committeeMembers / day1Sessions / day2Sessions が見つかりません");
+        }
+        const ok = confirm(
+          `イベントデータを取り込みます。\n` +
+          `・メンバー: ${members.length}名\n` +
+          `・セッション: ${d1.length + d2.length}件（Day1 ${d1.length} / Day2 ${d2.length}）\n\n` +
+          `既存の「メンバー」「タイムテーブル」「担当設定」は置き換えられます。\n` +
+          `（「役割」の設定はそのまま残ります）\n\nよろしいですか？`
+        );
+        if (!ok) return;
+
+        // メンバー
+        state.members = members
+          .map((name) => String(name).trim())
+          .filter((name) => name)
+          .map((name) => ({ id: uid("m"), name }));
+
+        // セッション（休憩・昼食などのブロックも含めて全て取り込む）
+        const toSession = (s, day) => ({
+          id: uid("s"),
+          day,
+          title: String(s.title || "").trim(),
+          start: normalizeTime(s.startTime),
+          end: normalizeTime(s.endTime),
+        });
+        state.sessions = [
+          ...d1.map((s) => toSession(s, 1)),
+          ...d2.map((s) => toSession(s, 2)),
+        ];
+
+        // セッション/メンバーのIDが変わるため、担当データはクリア
+        state.assignments = {};
+
+        // 任意項目: イベント名・各日の日付
+        if (p.eventName) state.meta.title = String(p.eventName).trim();
+        const sd = parseJpDate(p.startDate); if (sd) state.meta.day1Date = sd;
+        const ed = parseJpDate(p.endDate); if (ed) state.meta.day2Date = ed;
+
+        save();
+        renderAll();
+        alert(`取り込みが完了しました。\nメンバー ${state.members.length}名 / セッション ${state.sessions.length}件`);
+      } catch (e) {
+        alert("取り込みに失敗しました: " + e.message);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // "9:00" / "09:00" → "09:00"（time入力用に2桁ゼロ埋め）
+  function normalizeTime(t) {
+    const m = String(t || "").match(/(\d{1,2}):(\d{2})/);
+    if (!m) return "";
+    return String(m[1]).padStart(2, "0") + ":" + m[2];
+  }
+
+  // "2026年6月27日（土）" → "2026-06-27"
+  function parseJpDate(s) {
+    const m = String(s || "").match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/);
+    if (!m) return "";
+    return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  }
+
   function csvFileName(ext) {
     const base = (state.meta.title || "kouban").replace(/[\\/:*?"<>|]/g, "_");
     return `${base}.${ext}`;
@@ -593,6 +668,13 @@
       state.sessions.push({ id: uid("s"), day: 1, title: "", start: "09:00", end: "10:00" });
       save();
       renderSessions();
+    });
+
+    // イベントJSON取り込み
+    el("importEvent").addEventListener("click", () => el("importEventFile").click());
+    el("importEventFile").addEventListener("change", (e) => {
+      if (e.target.files[0]) importEventData(e.target.files[0]);
+      e.target.value = "";
     });
 
     // 担当モーダル

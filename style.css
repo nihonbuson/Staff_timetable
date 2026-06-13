@@ -110,6 +110,16 @@ body {
 }
 .empty-hint { color: var(--muted); font-size: 13px; padding: 8px 2px; }
 
+/* ---------- Import box ---------- */
+.import-box {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  background: #f0f9ff; border: 1px solid #bae6fd;
+  border-radius: var(--radius); padding: 14px; margin-bottom: 18px;
+}
+.import-box > div { flex: 1; min-width: 220px; }
+.import-box strong { font-size: 14px; }
+.import-box .desc { margin-top: 2px; }
+
 /* ---------- Conference meta ---------- */
 .conf-meta {
   display: flex; gap: 16px; flex-wrap: wrap;

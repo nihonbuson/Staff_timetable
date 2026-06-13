@@ -45,6 +45,14 @@
         <h2>③ タイムテーブル設定</h2>
         <p class="desc">カンファレンス（2日間）のセッションを登録します。日・開始/終了時刻・セッション名を入力してください。</p>
       </div>
+      <div class="import-box">
+        <div>
+          <strong>別サービスのイベントJSONから取り込む</strong>
+          <p class="desc">イベント情報の JSON ファイルから、メンバー（委員）とタイムテーブルをまとめて読み込みます。</p>
+        </div>
+        <button id="importEvent" class="btn">イベントJSONを取り込む</button>
+        <input type="file" id="importEventFile" accept="application/json,.json" hidden />
+      </div>
       <div class="conf-meta">
         <label class="field-inline">
           <span>イベント名</span>
