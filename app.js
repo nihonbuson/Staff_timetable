@@ -598,6 +598,239 @@
     reader.readAsText(file);
   }
 
+  // ============================================================
+  // Excel (.xlsx) エクスポート
+  //  - 5分刻みの行を生成
+  //  - 担当の役割名を記載し、役割の色で背景を塗りつぶす（連続セルは結合）
+  //  JSZip を用いて OOXML(.xlsx) を生成する。
+  // ============================================================
+  const SLOT_MIN = 5;
+  const XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+  function colLetter(n) {
+    let s = "";
+    while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+    return s;
+  }
+  function escapeXml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]));
+  }
+  function minToLabel(t) { return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; }
+  function colorToArgb(hex) {
+    const m = String(hex || "").match(/^#?([0-9a-fA-F]{6})$/);
+    return "FF" + (m ? m[1].toUpperCase() : "FFFFFF");
+  }
+
+  // 連続して同じキーが並ぶ区間（ラン）を求める。null は結合しない（個別）。
+  function runs(arr) {
+    const res = [];
+    let i = 0;
+    while (i < arr.length) {
+      if (arr[i] == null) { res.push({ start: i, len: 1, key: null }); i++; continue; }
+      let j = i;
+      while (j + 1 < arr.length && arr[j + 1] === arr[i]) j++;
+      res.push({ start: i, len: j - i + 1, key: arr[i] });
+      i = j + 1;
+    }
+    return res;
+  }
+
+  // スタイル定義（cellXfs のインデックス）
+  // 0:default 1:header 2:time 3:title 4:empty(枠線のみ) 5+:役割ごと
+  const XF = { DEFAULT: 0, HEADER: 1, TIME: 2, TITLE: 3, EMPTY: 4, ROLE_BASE: 5 };
+  function roleXf(roleIndex) { return XF.ROLE_BASE + roleIndex; }
+
+  function buildStylesXml() {
+    const roleFills = state.roles.map((r) =>
+      `<fill><patternFill patternType="solid"><fgColor rgb="${colorToArgb(r.color)}"/><bgColor indexed="64"/></patternFill></fill>`
+    ).join("");
+    const roleXfs = state.roles.map((_, i) =>
+      `<xf numFmtId="0" fontId="0" fillId="${3 + i}" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>`
+    ).join("");
+    const fillCount = 3 + state.roles.length; // none, gray125, header(=2), roles...
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="${XLSX_NS}">
+<fonts count="2"><font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/></font></fonts>
+<fills count="${fillCount}"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9D9D9"/><bgColor indexed="64"/></patternFill></fill>${roleFills}</fills>
+<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color indexed="64"/></left><right style="thin"><color indexed="64"/></right><top style="thin"><color indexed="64"/></top><bottom style="thin"><color indexed="64"/></bottom><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="${5 + state.roles.length}">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>
+${roleXfs}
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+  }
+
+  function cellXml(ref, styleIdx, text) {
+    if (text == null || text === "") return `<c r="${ref}" s="${styleIdx}"/>`;
+    return `<c r="${ref}" s="${styleIdx}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(text)}</t></is></c>`;
+  }
+
+  function buildSheetXml(day) {
+    const daySessions = sortedSessions().filter((s) => s.day === day);
+    const startMins = daySessions.map((s) => toMin(s.start)).filter((v) => v !== null);
+    const endMins = daySessions.map((s) => toMin(s.end)).filter((v) => v !== null);
+    if (startMins.length === 0 || endMins.length === 0) return null;
+    const startMin = Math.min(...startMins);
+    const endMin = Math.max(...endMins);
+
+    const slots = [];
+    for (let t = startMin; t < endMin; t += SLOT_MIN) slots.push(t);
+    const members = state.members;
+    const roleIndexOf = {};
+    state.roles.forEach((r, i) => { roleIndexOf[r.id] = i; });
+
+    const sessionAt = (t) => daySessions.find((s) => {
+      const a = toMin(s.start), b = toMin(s.end);
+      return a !== null && b !== null && a <= t && t < b;
+    });
+    const roleAt = (member, t) => {
+      const sess = sessionAt(t);
+      if (!sess) return null;
+      const seg = getAssignment(sess.id, member.id).find((g) => {
+        const a = toMin(g.start), b = toMin(g.end);
+        return a !== null && b !== null && a <= t && t < b;
+      });
+      return seg ? seg.roleId : null;
+    };
+
+    // 各列のキー配列（結合判定用）
+    const titleKeys = slots.map((t) => { const s = sessionAt(t); return s ? s.id : null; });
+    const memberKeys = members.map((m) => slots.map((t) => roleAt(m, t)));
+
+    // 行数 = ヘッダ1 + slots
+    const rowsXml = [];
+    const merges = [];
+
+    // ヘッダ行
+    let header = `<row r="1">`;
+    header += cellXml("A1", XF.HEADER, "時間");
+    header += cellXml("B1", XF.HEADER, "");
+    header += cellXml("C1", XF.HEADER, "");
+    header += cellXml("D1", XF.HEADER, "タイムスケジュール");
+    members.forEach((m, i) => { header += cellXml(`${colLetter(5 + i)}1`, XF.HEADER, m.name || "(無名)"); });
+    header += `</row>`;
+    rowsXml.push(header);
+    merges.push("A1:C1");
+
+    // タイトル列の結合（セッション単位）
+    const titleStyleByRow = new Array(slots.length).fill(XF.EMPTY);
+    const titleTextByRow = new Array(slots.length).fill("");
+    runs(titleKeys).forEach((run) => {
+      if (run.key == null) return; // 枠線のみ
+      const sess = daySessions.find((s) => s.id === run.key);
+      const dur = (toMin(sess.end) - toMin(sess.start));
+      const text = `${sess.title || "(無題)"}（${dur}分）`;
+      titleStyleByRow[run.start] = XF.TITLE;
+      titleTextByRow[run.start] = text;
+      for (let k = 1; k < run.len; k++) titleStyleByRow[run.start + k] = XF.TITLE;
+      if (run.len > 1) {
+        const top = run.start + 2, bottom = run.start + run.len - 1 + 2;
+        merges.push(`D${top}:D${bottom}`);
+      }
+    });
+
+    // メンバー列の結合（役割の連続単位）
+    const memStyleByRow = members.map(() => new Array(slots.length).fill(XF.EMPTY));
+    const memTextByRow = members.map(() => new Array(slots.length).fill(""));
+    members.forEach((m, mi) => {
+      runs(memberKeys[mi]).forEach((run) => {
+        if (run.key == null) return;
+        const xf = roleXf(roleIndexOf[run.key]);
+        const role = getRole(run.key);
+        memStyleByRow[mi][run.start] = xf;
+        memTextByRow[mi][run.start] = role ? (role.name || "(無名)") : "";
+        for (let k = 1; k < run.len; k++) memStyleByRow[mi][run.start + k] = xf;
+        if (run.len > 1) {
+          const col = colLetter(5 + mi);
+          const top = run.start + 2, bottom = run.start + run.len - 1 + 2;
+          merges.push(`${col}${top}:${col}${bottom}`);
+        }
+      });
+    });
+
+    // データ行
+    slots.forEach((t, r) => {
+      const rowNum = r + 2;
+      let row = `<row r="${rowNum}">`;
+      row += cellXml(`A${rowNum}`, XF.TIME, minToLabel(t));
+      row += cellXml(`B${rowNum}`, XF.TIME, "〜");
+      row += cellXml(`C${rowNum}`, XF.TIME, minToLabel(t + SLOT_MIN));
+      row += cellXml(`D${rowNum}`, titleStyleByRow[r], titleTextByRow[r]);
+      members.forEach((m, mi) => {
+        row += cellXml(`${colLetter(5 + mi)}${rowNum}`, memStyleByRow[mi][r], memTextByRow[mi][r]);
+      });
+      row += `</row>`;
+      rowsXml.push(row);
+    });
+
+    const lastCol = colLetter(4 + members.length);
+    const cols = `<cols>` +
+      `<col min="1" max="1" width="7" customWidth="1"/>` +
+      `<col min="2" max="2" width="3" customWidth="1"/>` +
+      `<col min="3" max="3" width="7" customWidth="1"/>` +
+      `<col min="4" max="4" width="24" customWidth="1"/>` +
+      `<col min="5" max="${4 + members.length}" width="9" customWidth="1"/>` +
+      `</cols>`;
+    const mergeXml = merges.length
+      ? `<mergeCells count="${merges.length}">${merges.map((m) => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>`
+      : "";
+
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="${XLSX_NS}"><dimension ref="A1:${lastCol}${slots.length + 1}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>${cols}<sheetData>${rowsXml.join("")}</sheetData>${mergeXml}</worksheet>`;
+  }
+
+  async function exportXlsx() {
+    if (typeof JSZip === "undefined") {
+      alert("Excel生成ライブラリ(JSZip)の読み込みに失敗しました。ページを再読み込みしてください。");
+      return;
+    }
+    const days = [1, 2].filter((d) => state.sessions.some((s) => s.day === d));
+    if (state.members.length === 0 || days.length === 0) {
+      alert("メンバーとタイムテーブルを設定してください。");
+      return;
+    }
+    const sheets = days.map((d) => ({ day: d, xml: buildSheetXml(d) })).filter((s) => s.xml);
+    if (sheets.length === 0) { alert("出力できるセッションがありません。"); return; }
+
+    const n = sheets.length;
+    const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}</Types>`;
+
+    const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+
+    const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="${XLSX_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((s, i) => `<sheet name="Day${s.day}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")}</sheets></workbook>`;
+
+    const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", contentTypes);
+    zip.file("_rels/.rels", rootRels);
+    zip.file("xl/workbook.xml", workbook);
+    zip.file("xl/_rels/workbook.xml.rels", workbookRels);
+    zip.file("xl/styles.xml", buildStylesXml());
+    sheets.forEach((s, i) => zip.file(`xl/worksheets/sheet${i + 1}.xml`, s.xml));
+
+    const blob = await zip.generateAsync({
+      type: "blob",
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = csvFileName("xlsx");
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // ---------- 別サービスのイベントJSON取り込み ----------
   // 想定フォーマット例: { eventName, startDate, endDate,
   //   committeeMembers: ["氏名", ...],
@@ -770,6 +1003,9 @@
     });
 
     // 表示タブ：エクスポート/インポート
+    el("exportXlsx").addEventListener("click", () => {
+      exportXlsx().catch((e) => alert("Excel出力に失敗しました: " + e.message));
+    });
     el("exportCsv").addEventListener("click", exportCsv);
     el("exportJson").addEventListener("click", exportJson);
     el("importJson").addEventListener("click", () => el("importFile").click());

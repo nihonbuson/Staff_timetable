@@ -86,10 +86,11 @@
       <div class="panel-head no-print">
         <h2>⑤ 表示</h2>
         <div class="panel-actions">
+          <button id="exportXlsx" class="btn btn-primary">Excel エクスポート</button>
           <button id="exportCsv" class="btn">CSV エクスポート</button>
           <button id="exportJson" class="btn">JSON エクスポート</button>
           <button id="importJson" class="btn">JSON インポート</button>
-          <button id="printBtn" class="btn btn-primary">印刷</button>
+          <button id="printBtn" class="btn">印刷</button>
           <input type="file" id="importFile" accept="application/json" hidden />
         </div>
       </div>
@@ -117,6 +118,7 @@
     <span>データはこのブラウザ内（localStorage）に保存されます。バックアップは JSON エクスポートをご利用ください。</span>
   </footer>
 
+  <script src="vendor/jszip.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
