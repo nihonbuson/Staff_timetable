@@ -258,9 +258,19 @@
     });
   }
 
+  // 開始時刻の入力確定後、表示上の並び順が実際に変わるときだけ再描画する。
+  // （順番が変わらなければ再描画せず、編集中のフォーカスを保てる）
+  function resortSessionsIfNeeded() {
+    const domOrder = [...el("sessionList").querySelectorAll(".session-item")]
+      .map((r) => r._sid).join(",");
+    const sortedOrder = sortedSessions().map((x) => x.id).join(",");
+    if (domOrder !== sortedOrder) renderSessions();
+  }
+
   function sessionRow(s) {
     const row = document.createElement("div");
     row.className = "session-item";
+    row._sid = s.id;
     row.innerHTML = `
       <label class="mini">日<select class="s-day">
         <option value="1">Day1</option><option value="2">Day2</option>
@@ -276,7 +286,11 @@
     row.querySelector(".s-end").value = s.end || "";
     row.querySelector(".s-day").addEventListener("change", (e) => { s.day = Number(e.target.value); save(); renderSessions(); });
     row.querySelector(".s-title").addEventListener("input", (e) => { s.title = e.target.value; save(); });
-    row.querySelector(".s-start").addEventListener("change", (e) => { s.start = e.target.value; save(); renderSessions(); });
+    // 開始時刻: 入力中は値の保存のみ（並べ替えしない＝フォーカスを保持）。
+    // 入力確定(blur)時に、並び順が変わる場合だけ再描画する。
+    const startInput = row.querySelector(".s-start");
+    startInput.addEventListener("input", () => { s.start = startInput.value; save(); });
+    startInput.addEventListener("blur", resortSessionsIfNeeded);
     row.querySelector(".s-end").addEventListener("change", (e) => { s.end = e.target.value; save(); });
     row.querySelector('[data-act="del"]').addEventListener("click", () => {
       if (!confirm("このセッションを削除しますか？担当データも削除されます。")) return;
