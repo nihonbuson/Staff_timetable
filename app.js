@@ -31,6 +31,8 @@
       sessions: [],
       // assignments[sessionId][memberId] = [ { roleId, start, end } ]
       assignments: {},
+      // prep[sessionId] = [ { name, time } ]  （準備物：名前＋単一時刻）
+      prep: {},
     };
   }
 
@@ -84,6 +86,18 @@
 
   function fmtTime(t) { return t || ""; }
   function timeRange(s, e) { return `${fmtTime(s)}–${fmtTime(e)}`; }
+
+  function getPrep(sessionId) {
+    return state.prep?.[sessionId] || [];
+  }
+  function setPrep(sessionId, items) {
+    if (items && items.length) state.prep[sessionId] = items;
+    else delete state.prep[sessionId];
+    save();
+  }
+  function sortedPrep(items) {
+    return [...items].sort((a, b) => (toMin(a.time) ?? 0) - (toMin(b.time) ?? 0));
+  }
 
   // "HH:MM" → 分。形式不正なら null
   function toMin(t) {
@@ -293,9 +307,10 @@
     startInput.addEventListener("blur", resortSessionsIfNeeded);
     row.querySelector(".s-end").addEventListener("change", (e) => { s.end = e.target.value; save(); });
     row.querySelector('[data-act="del"]').addEventListener("click", () => {
-      if (!confirm("このセッションを削除しますか？担当データも削除されます。")) return;
+      if (!confirm("このセッションを削除しますか？担当・準備物データも削除されます。")) return;
       state.sessions = state.sessions.filter((x) => x.id !== s.id);
       delete state.assignments[s.id];
+      delete state.prep[s.id];
       save();
       renderAll();
     });
@@ -467,7 +482,140 @@
   }
 
   // ============================================================
-  // ⑤ 表示
+  // ⑤ 準備物
+  // ============================================================
+  function prepCellContent(td, items) {
+    td.innerHTML = "";
+    if (!items.length) {
+      td.classList.add("empty");
+      td.textContent = "—";
+      return;
+    }
+    td.classList.remove("empty");
+    const stack = document.createElement("div");
+    stack.className = "chip-stack";
+    sortedPrep(items).forEach((it) => {
+      const line = document.createElement("div");
+      line.className = "prep-line";
+      line.textContent = (it.time ? it.time + " " : "") + (it.name || "");
+      stack.appendChild(line);
+    });
+    td.appendChild(stack);
+  }
+
+  function renderPrep() {
+    const wrap = el("prepTableWrap");
+    wrap.innerHTML = "";
+    if (state.sessions.length === 0) {
+      wrap.innerHTML = '<p class="empty-hint">先に「タイムテーブル設定」を済ませてください。</p>';
+      return;
+    }
+    const table = document.createElement("table");
+    table.className = "grid";
+    const thead = document.createElement("thead");
+    thead.innerHTML = '<tr><th class="time-col">セッション</th><th>準備物</th></tr>';
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    [1, 2].forEach((day) => {
+      const daySessions = sortedSessions().filter((s) => s.day === day);
+      if (daySessions.length === 0) return;
+      const dr = document.createElement("tr");
+      dr.className = "day-row";
+      const dateLabel = day === 1 ? state.meta.day1Date : state.meta.day2Date;
+      dr.innerHTML = `<td colspan="2">Day${day}${dateLabel ? `（${dateLabel}）` : ""}</td>`;
+      tbody.appendChild(dr);
+
+      daySessions.forEach((s) => {
+        const tr = document.createElement("tr");
+        const timeTd = document.createElement("td");
+        timeTd.className = "time-col";
+        timeTd.innerHTML = `<div class="s-name">${escapeHtml(s.title || "(無題)")}</div><div class="s-time">${timeRange(s.start, s.end)}</div>`;
+        tr.appendChild(timeTd);
+
+        const td = document.createElement("td");
+        td.className = "assign-cell";
+        prepCellContent(td, getPrep(s.id));
+        td.addEventListener("click", () => openPrepModal(s));
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      });
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+  }
+
+  // ---------- 準備物編集モーダル ----------
+  let prepCtx = null; // { session }
+
+  function openPrepModal(session) {
+    prepCtx = { session };
+    el("prepModalTitle").textContent = "準備物の設定";
+    el("prepModalSub").textContent = `${session.title || "(無題)"} ／ Day${session.day} ${timeRange(session.start, session.end)}`;
+    const existing = getPrep(session.id);
+    const items = existing.length
+      ? existing.map((x) => ({ ...x }))
+      : [{ name: "", time: session.start || "" }];
+    renderPrepRows(items);
+    el("prepModal").hidden = false;
+  }
+
+  function renderPrepRows(items) {
+    const list = el("prepList");
+    list.innerHTML = "";
+    items.forEach((it) => list.appendChild(prepRow(it, items)));
+  }
+
+  function prepRow(it, items) {
+    const row = document.createElement("div");
+    row.className = "segment-row";
+    row.innerHTML = `
+      <input type="text" class="prep-name" placeholder="準備物名（例: マイク）" />
+      <input type="time" class="prep-time" title="時刻" />
+      <button class="icon-btn danger" data-act="del" title="この行を削除">✕</button>`;
+    const name = row.querySelector(".prep-name");
+    const time = row.querySelector(".prep-time");
+    name.value = it.name || "";
+    time.value = it.time || "";
+    name.addEventListener("input", () => { it.name = name.value; });
+    time.addEventListener("change", () => { it.time = time.value; });
+    row.querySelector('[data-act="del"]').addEventListener("click", () => {
+      const idx = items.indexOf(it);
+      if (idx >= 0) items.splice(idx, 1);
+      if (items.length === 0) items.push({ name: "", time: (prepCtx && prepCtx.session.start) || "" });
+      renderPrepRows(items);
+    });
+    row._items = items;
+    return row;
+  }
+
+  function currentPrepItems() {
+    const first = el("prepList").firstElementChild;
+    return first ? first._items : [];
+  }
+
+  function closePrepModal() {
+    el("prepModal").hidden = true;
+    prepCtx = null;
+  }
+
+  function savePrep() {
+    if (!prepCtx) return;
+    const items = currentPrepItems()
+      .filter((x) => (x.name || "").trim())
+      .map((x) => ({ name: x.name.trim(), time: x.time || "" }));
+    setPrep(prepCtx.session.id, items);
+    closePrepModal();
+    renderAll();
+  }
+
+  // 準備物をテキスト化（CSV/集約表示用）
+  function prepToText(items) {
+    return sortedPrep(items).map((it) => (it.time ? it.time + " " : "") + (it.name || "")).join(" / ");
+  }
+
+  // ============================================================
+  // ⑥ 表示
   // ============================================================
   function renderDisplay() {
     const area = el("displayArea");
@@ -516,7 +664,7 @@
 
       const thead = document.createElement("thead");
       const hr = document.createElement("tr");
-      hr.innerHTML = '<th class="time-col">時間 / セッション</th>';
+      hr.innerHTML = '<th class="time-col">時間 / セッション</th><th>準備物</th>';
       state.members.forEach((m) => {
         const th = document.createElement("th");
         th.textContent = m.name || "(無名)";
@@ -532,6 +680,10 @@
         timeTd.className = "time-col";
         timeTd.innerHTML = `<div class="s-time">${timeRange(s.start, s.end)}</div><div class="s-name">${escapeHtml(s.title || "(無題)")}</div>`;
         tr.appendChild(timeTd);
+        const prepTd = document.createElement("td");
+        prepTd.className = "time-col";
+        prepCellContent(prepTd, getPrep(s.id));
+        tr.appendChild(prepTd);
         state.members.forEach((m) => {
           const td = document.createElement("td");
           renderCellContent(td, getAssignment(s.id, m.id));
@@ -559,10 +711,10 @@
 
   function exportCsv() {
     const rows = [];
-    rows.push(["日", "開始", "終了", "セッション", ...state.members.map((m) => m.name || "(無名)")]);
+    rows.push(["日", "開始", "終了", "セッション", "準備物", ...state.members.map((m) => m.name || "(無名)")]);
     [1, 2].forEach((day) => {
       sortedSessions().filter((s) => s.day === day).forEach((s) => {
-        const row = [`Day${day}`, s.start || "", s.end || "", s.title || ""];
+        const row = [`Day${day}`, s.start || "", s.end || "", s.title || "", prepToText(getPrep(s.id))];
         state.members.forEach((m) => row.push(segmentsToText(getAssignment(s.id, m.id))));
         rows.push(row);
       });
@@ -699,9 +851,27 @@ ${roleXfs}
       return seg ? seg.roleId : null;
     };
 
+    // 列構成: A=開始 B=〜 C=終了 D=タイムスケジュール E=準備物 F〜=メンバー
+    const MEMBER_COL0 = 6; // メンバー列の開始番号
+    const PREP_COL = 5;
+
     // 各列のキー配列（結合判定用）
     const titleKeys = slots.map((t) => { const s = sessionAt(t); return s ? s.id : null; });
     const memberKeys = members.map((m) => slots.map((t) => roleAt(m, t)));
+
+    // 準備物: 各アイテムを「時刻を含む5分スロット」の行に配置（複数は連結）
+    const prepByRow = slots.map(() => []);
+    daySessions.forEach((s) => {
+      getPrep(s.id).forEach((it) => {
+        const tm = toMin(it.time);
+        if (tm === null || !it.name) return;
+        const slot = Math.floor(tm / SLOT_MIN) * SLOT_MIN;
+        let idx = Math.round((slot - startMin) / SLOT_MIN);
+        if (idx < 0) idx = 0;
+        if (idx > slots.length - 1) idx = slots.length - 1;
+        prepByRow[idx].push(it.name);
+      });
+    });
 
     // 行数 = ヘッダ1 + slots
     const rowsXml = [];
@@ -713,7 +883,8 @@ ${roleXfs}
     header += cellXml("B1", XF.HEADER, "");
     header += cellXml("C1", XF.HEADER, "");
     header += cellXml("D1", XF.HEADER, "タイムスケジュール");
-    members.forEach((m, i) => { header += cellXml(`${colLetter(5 + i)}1`, XF.HEADER, m.name || "(無名)"); });
+    header += cellXml("E1", XF.HEADER, "準備物");
+    members.forEach((m, i) => { header += cellXml(`${colLetter(MEMBER_COL0 + i)}1`, XF.HEADER, m.name || "(無名)"); });
     header += `</row>`;
     rowsXml.push(header);
     merges.push("A1:C1");
@@ -747,7 +918,7 @@ ${roleXfs}
         memTextByRow[mi][run.start] = role ? (role.name || "(無名)") : "";
         for (let k = 1; k < run.len; k++) memStyleByRow[mi][run.start + k] = xf;
         if (run.len > 1) {
-          const col = colLetter(5 + mi);
+          const col = colLetter(MEMBER_COL0 + mi);
           const top = run.start + 2, bottom = run.start + run.len - 1 + 2;
           merges.push(`${col}${top}:${col}${bottom}`);
         }
@@ -762,20 +933,23 @@ ${roleXfs}
       row += cellXml(`B${rowNum}`, XF.TIME, "〜");
       row += cellXml(`C${rowNum}`, XF.TIME, minToLabel(t + SLOT_MIN));
       row += cellXml(`D${rowNum}`, titleStyleByRow[r], titleTextByRow[r]);
+      const prepText = prepByRow[r].join(" / ");
+      row += cellXml(`${colLetter(PREP_COL)}${rowNum}`, prepText ? XF.TITLE : XF.EMPTY, prepText);
       members.forEach((m, mi) => {
-        row += cellXml(`${colLetter(5 + mi)}${rowNum}`, memStyleByRow[mi][r], memTextByRow[mi][r]);
+        row += cellXml(`${colLetter(MEMBER_COL0 + mi)}${rowNum}`, memStyleByRow[mi][r], memTextByRow[mi][r]);
       });
       row += `</row>`;
       rowsXml.push(row);
     });
 
-    const lastCol = colLetter(4 + members.length);
+    const lastCol = colLetter(5 + members.length);
     const cols = `<cols>` +
       `<col min="1" max="1" width="7" customWidth="1"/>` +
       `<col min="2" max="2" width="3" customWidth="1"/>` +
       `<col min="3" max="3" width="7" customWidth="1"/>` +
       `<col min="4" max="4" width="24" customWidth="1"/>` +
-      `<col min="5" max="${4 + members.length}" width="9" customWidth="1"/>` +
+      `<col min="5" max="5" width="18" customWidth="1"/>` +
+      `<col min="6" max="${5 + members.length}" width="9" customWidth="1"/>` +
       `</cols>`;
     const mergeXml = merges.length
       ? `<mergeCells count="${merges.length}">${merges.map((m) => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>`
@@ -883,8 +1057,9 @@ ${roleXfs}
           ...d2.map((s) => toSession(s, 2)),
         ];
 
-        // セッション/メンバーのIDが変わるため、担当データはクリア
+        // セッション/メンバーのIDが変わるため、担当・準備物データはクリア
         state.assignments = {};
+        state.prep = {};
 
         // 任意項目: イベント名・各日の日付
         if (p.eventName) state.meta.title = String(p.eventName).trim();
@@ -944,6 +1119,7 @@ ${roleXfs}
     renderRoles();
     renderSessions();
     renderAssign();
+    renderPrep();
     renderDisplay();
   }
 
@@ -1000,6 +1176,21 @@ ${roleXfs}
     });
     el("assignModal").addEventListener("click", (e) => {
       if (e.target === el("assignModal")) closeAssignModal();
+    });
+
+    // 準備物モーダル
+    el("addPrep").addEventListener("click", () => {
+      const items = currentPrepItems();
+      items.push({ name: "", time: (prepCtx && prepCtx.session.start) || "" });
+      renderPrepRows(items);
+    });
+    el("prepSave").addEventListener("click", savePrep);
+    el("prepCancel").addEventListener("click", closePrepModal);
+    el("prepClear").addEventListener("click", () => {
+      renderPrepRows([{ name: "", time: (prepCtx && prepCtx.session.start) || "" }]);
+    });
+    el("prepModal").addEventListener("click", (e) => {
+      if (e.target === el("prepModal")) closePrepModal();
     });
 
     // 表示タブ：エクスポート/インポート

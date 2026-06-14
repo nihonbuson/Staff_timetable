@@ -14,7 +14,8 @@
       <button class="tab" data-tab="roles">② 役割設定</button>
       <button class="tab" data-tab="sessions">③ タイムテーブル設定</button>
       <button class="tab" data-tab="assign">④ 担当設定</button>
-      <button class="tab" data-tab="display">⑤ 表示</button>
+      <button class="tab" data-tab="prep">⑤ 準備物</button>
+      <button class="tab" data-tab="display">⑥ 表示</button>
     </nav>
   </header>
 
@@ -81,10 +82,19 @@
       <div class="table-wrap" id="assignTableWrap"></div>
     </section>
 
-    <!-- ⑤ 表示 -->
+    <!-- ⑤ 準備物 -->
+    <section class="panel" id="panel-prep" hidden>
+      <div class="panel-head">
+        <h2>⑤ 準備物</h2>
+        <p class="desc">各セッションで必要な準備物を設定します。セルをクリックして、準備物名と時刻を入力してください。</p>
+      </div>
+      <div class="table-wrap" id="prepTableWrap"></div>
+    </section>
+
+    <!-- ⑥ 表示 -->
     <section class="panel" id="panel-display" hidden>
       <div class="panel-head no-print">
-        <h2>⑤ 表示</h2>
+        <h2>⑥ 表示</h2>
         <div class="panel-actions">
           <button id="exportXlsx" class="btn btn-primary">Excel エクスポート</button>
           <button id="exportCsv" class="btn">CSV エクスポート</button>
@@ -110,6 +120,22 @@
         <div class="spacer"></div>
         <button id="assignCancel" class="btn btn-ghost">キャンセル</button>
         <button id="assignSave" class="btn btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 準備物編集モーダル -->
+  <div id="prepModal" class="modal" hidden>
+    <div class="modal-card">
+      <h3 id="prepModalTitle">準備物の設定</h3>
+      <p class="desc" id="prepModalSub"></p>
+      <div id="prepList" class="segment-list"></div>
+      <button id="addPrep" class="btn btn-ghost small">＋ 準備物を追加</button>
+      <div class="modal-actions">
+        <button id="prepClear" class="btn btn-ghost">すべてクリア</button>
+        <div class="spacer"></div>
+        <button id="prepCancel" class="btn btn-ghost">キャンセル</button>
+        <button id="prepSave" class="btn btn-primary">保存</button>
       </div>
     </div>
   </div>
