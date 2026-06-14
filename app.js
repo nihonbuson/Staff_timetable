@@ -85,6 +85,50 @@
   function fmtTime(t) { return t || ""; }
   function timeRange(s, e) { return `${fmtTime(s)}–${fmtTime(e)}`; }
 
+  // "HH:MM" → 分。形式不正なら null
+  function toMin(t) {
+    const m = String(t || "").match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    return Number(m[1]) * 60 + Number(m[2]);
+  }
+
+  // 担当（役割の時間帯）のバリデーション。問題があればエラーメッセージ、無ければ null。
+  // segs はいずれも roleId が設定済みの想定。
+  function validateSegments(session, segs) {
+    const ss = toMin(session.start);
+    const se = toMin(session.end);
+    const items = segs.map((s) => ({
+      name: (getRole(s.roleId) || {}).name || "(無名の役割)",
+      start: s.start, end: s.end,
+      a: toMin(s.start), b: toMin(s.end),
+    }));
+
+    for (const it of items) {
+      if (it.a === null || it.b === null) {
+        return `「${it.name}」の開始時刻・終了時刻を入力してください。`;
+      }
+      if (it.b <= it.a) {
+        return `「${it.name}」の終了時刻(${it.end})は開始時刻(${it.start})より後にしてください。`;
+      }
+      if (ss !== null && it.a < ss) {
+        return `「${it.name}」の開始時刻(${it.start})は、セッションの開始時刻(${session.start})以降にしてください。`;
+      }
+      if (se !== null && it.b > se) {
+        return `「${it.name}」の終了時刻(${it.end})は、セッションの終了時刻(${session.end})以前にしてください。`;
+      }
+    }
+
+    // 時間帯の重複チェック（隣接＝前の終了と次の開始が同じ、は重複ではない）
+    const sorted = [...items].sort((x, y) => x.a - y.a);
+    for (let k = 1; k < sorted.length; k++) {
+      if (sorted[k].a < sorted[k - 1].b) {
+        return `役割の時間帯が重複しています：「${sorted[k - 1].name}」(${timeRange(sorted[k - 1].start, sorted[k - 1].end)})` +
+          ` と 「${sorted[k].name}」(${timeRange(sorted[k].start, sorted[k].end)})`;
+      }
+    }
+    return null;
+  }
+
   // ============================================================
   // タブ
   // ============================================================
@@ -398,6 +442,11 @@
   function saveAssign() {
     if (!modalCtx) return;
     const segs = currentSegs().filter((s) => s.roleId); // 役割未選択の行は無視
+    const err = validateSegments(modalCtx.session, segs);
+    if (err) {
+      alert(err);
+      return; // モーダルは閉じず、修正を促す
+    }
     setAssignment(modalCtx.session.id, modalCtx.member.id, segs);
     closeAssignModal();
     renderAll();
