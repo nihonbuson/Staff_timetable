@@ -851,9 +851,10 @@ ${roleXfs}
       return seg ? seg.roleId : null;
     };
 
-    // 列構成: A=開始 B=〜 C=終了 D=タイムスケジュール E=準備物 F〜=メンバー
-    const MEMBER_COL0 = 6; // メンバー列の開始番号
-    const PREP_COL = 5;
+    // 列構成: A=開始 B=〜 C=終了 D=タイムスケジュール E=配布タイミング F〜=メンバー 末尾=準備物
+    const TIMING_COL = 5;          // 配布タイミング列（★）
+    const MEMBER_COL0 = 6;         // メンバー列の開始番号
+    const PREP_COL = 6 + members.length; // 準備物列（一番右）
 
     // 各列のキー配列（結合判定用）
     const titleKeys = slots.map((t) => { const s = sessionAt(t); return s ? s.id : null; });
@@ -883,8 +884,9 @@ ${roleXfs}
     header += cellXml("B1", XF.HEADER, "");
     header += cellXml("C1", XF.HEADER, "");
     header += cellXml("D1", XF.HEADER, "タイムスケジュール");
-    header += cellXml("E1", XF.HEADER, "準備物");
+    header += cellXml(`${colLetter(TIMING_COL)}1`, XF.HEADER, "配布タイミング");
     members.forEach((m, i) => { header += cellXml(`${colLetter(MEMBER_COL0 + i)}1`, XF.HEADER, m.name || "(無名)"); });
+    header += cellXml(`${colLetter(PREP_COL)}1`, XF.HEADER, "準備物");
     header += `</row>`;
     rowsXml.push(header);
     merges.push("A1:C1");
@@ -934,22 +936,26 @@ ${roleXfs}
       row += cellXml(`C${rowNum}`, XF.TIME, minToLabel(t + SLOT_MIN));
       row += cellXml(`D${rowNum}`, titleStyleByRow[r], titleTextByRow[r]);
       const prepText = prepByRow[r].join(" / ");
-      row += cellXml(`${colLetter(PREP_COL)}${rowNum}`, prepText ? XF.TITLE : XF.EMPTY, prepText);
+      // 配布タイミング列: 準備物のある行に★
+      row += cellXml(`${colLetter(TIMING_COL)}${rowNum}`, XF.TIME, prepText ? "★" : "");
       members.forEach((m, mi) => {
         row += cellXml(`${colLetter(MEMBER_COL0 + mi)}${rowNum}`, memStyleByRow[mi][r], memTextByRow[mi][r]);
       });
+      // 準備物列（一番右）: 準備物名
+      row += cellXml(`${colLetter(PREP_COL)}${rowNum}`, prepText ? XF.TITLE : XF.EMPTY, prepText);
       row += `</row>`;
       rowsXml.push(row);
     });
 
-    const lastCol = colLetter(5 + members.length);
+    const lastCol = colLetter(PREP_COL);
     const cols = `<cols>` +
       `<col min="1" max="1" width="7" customWidth="1"/>` +
       `<col min="2" max="2" width="3" customWidth="1"/>` +
       `<col min="3" max="3" width="7" customWidth="1"/>` +
       `<col min="4" max="4" width="24" customWidth="1"/>` +
-      `<col min="5" max="5" width="18" customWidth="1"/>` +
-      `<col min="6" max="${5 + members.length}" width="9" customWidth="1"/>` +
+      `<col min="${TIMING_COL}" max="${TIMING_COL}" width="12" customWidth="1"/>` +
+      `<col min="${MEMBER_COL0}" max="${MEMBER_COL0 + members.length - 1}" width="9" customWidth="1"/>` +
+      `<col min="${PREP_COL}" max="${PREP_COL}" width="20" customWidth="1"/>` +
       `</cols>`;
     const mergeXml = merges.length
       ? `<mergeCells count="${merges.length}">${merges.map((m) => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>`
