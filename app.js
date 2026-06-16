@@ -33,6 +33,8 @@
       assignments: {},
       // prep[sessionId] = [ { name, time } ]  （準備物：名前＋単一時刻）
       prep: {},
+      // notes[sessionId] = [ { name, time } ]  （備考：内容＋単一時刻）
+      notes: {},
     };
   }
 
@@ -87,12 +89,16 @@
   function fmtTime(t) { return t || ""; }
   function timeRange(s, e) { return `${fmtTime(s)}–${fmtTime(e)}`; }
 
-  function getPrep(sessionId) {
-    return state.prep?.[sessionId] || [];
-  }
+  function getPrep(sessionId) { return state.prep?.[sessionId] || []; }
   function setPrep(sessionId, items) {
     if (items && items.length) state.prep[sessionId] = items;
     else delete state.prep[sessionId];
+    save();
+  }
+  function getNotes(sessionId) { return state.notes?.[sessionId] || []; }
+  function setNotes(sessionId, items) {
+    if (items && items.length) state.notes[sessionId] = items;
+    else delete state.notes[sessionId];
     save();
   }
   function sortedPrep(items) {
@@ -307,10 +313,11 @@
     startInput.addEventListener("blur", resortSessionsIfNeeded);
     row.querySelector(".s-end").addEventListener("change", (e) => { s.end = e.target.value; save(); });
     row.querySelector('[data-act="del"]').addEventListener("click", () => {
-      if (!confirm("このセッションを削除しますか？担当・準備物データも削除されます。")) return;
+      if (!confirm("このセッションを削除しますか？担当・準備物・備考データも削除されます。")) return;
       state.sessions = state.sessions.filter((x) => x.id !== s.id);
       delete state.assignments[s.id];
       delete state.prep[s.id];
+      delete state.notes[s.id];
       save();
       renderAll();
     });
@@ -503,6 +510,12 @@
     td.appendChild(stack);
   }
 
+  // 準備物・備考は同じ構造（名前＋単一時刻のリスト）。kind で切り替える。
+  const ITEM_KIND = {
+    prep: { title: "準備物の設定", placeholder: "準備物名（例: マイク）", get: getPrep, set: setPrep },
+    notes: { title: "備考の設定", placeholder: "備考内容", get: getNotes, set: setNotes },
+  };
+
   function renderPrep() {
     const wrap = el("prepTableWrap");
     wrap.innerHTML = "";
@@ -513,7 +526,7 @@
     const table = document.createElement("table");
     table.className = "grid";
     const thead = document.createElement("thead");
-    thead.innerHTML = '<tr><th class="time-col">セッション</th><th>準備物</th></tr>';
+    thead.innerHTML = '<tr><th class="time-col">セッション</th><th>準備物</th><th>備考</th></tr>';
     table.appendChild(thead);
 
     const tbody = document.createElement("tbody");
@@ -523,7 +536,7 @@
       const dr = document.createElement("tr");
       dr.className = "day-row";
       const dateLabel = day === 1 ? state.meta.day1Date : state.meta.day2Date;
-      dr.innerHTML = `<td colspan="2">Day${day}${dateLabel ? `（${dateLabel}）` : ""}</td>`;
+      dr.innerHTML = `<td colspan="3">Day${day}${dateLabel ? `（${dateLabel}）` : ""}</td>`;
       tbody.appendChild(dr);
 
       daySessions.forEach((s) => {
@@ -533,11 +546,13 @@
         timeTd.innerHTML = `<div class="s-name">${escapeHtml(s.title || "(無題)")}</div><div class="s-time">${timeRange(s.start, s.end)}</div>`;
         tr.appendChild(timeTd);
 
-        const td = document.createElement("td");
-        td.className = "assign-cell";
-        prepCellContent(td, getPrep(s.id));
-        td.addEventListener("click", () => openPrepModal(s));
-        tr.appendChild(td);
+        ["prep", "notes"].forEach((kind) => {
+          const td = document.createElement("td");
+          td.className = "assign-cell";
+          prepCellContent(td, ITEM_KIND[kind].get(s.id));
+          td.addEventListener("click", () => openItemModal(s, kind));
+          tr.appendChild(td);
+        });
         tbody.appendChild(tr);
       });
     });
@@ -545,36 +560,40 @@
     wrap.appendChild(table);
   }
 
-  // ---------- 準備物編集モーダル ----------
-  let prepCtx = null; // { session }
+  // ---------- 準備物・備考 編集モーダル（共通） ----------
+  let itemCtx = null; // { session, kind }
 
-  function openPrepModal(session) {
-    prepCtx = { session };
-    el("prepModalTitle").textContent = "準備物の設定";
+  function openItemModal(session, kind) {
+    itemCtx = { session, kind };
+    const meta = ITEM_KIND[kind];
+    el("prepModalTitle").textContent = meta.title;
+    el("addPrep").textContent = kind === "notes" ? "＋ 備考を追加" : "＋ 準備物を追加";
     el("prepModalSub").textContent = `${session.title || "(無題)"} ／ Day${session.day} ${timeRange(session.start, session.end)}`;
-    const existing = getPrep(session.id);
+    const existing = meta.get(session.id);
     const items = existing.length
       ? existing.map((x) => ({ ...x }))
       : [{ name: "", time: session.start || "" }];
-    renderPrepRows(items);
+    renderItemRows(items);
     el("prepModal").hidden = false;
   }
 
-  function renderPrepRows(items) {
+  function renderItemRows(items) {
     const list = el("prepList");
     list.innerHTML = "";
-    items.forEach((it) => list.appendChild(prepRow(it, items)));
+    items.forEach((it) => list.appendChild(itemRow(it, items)));
   }
 
-  function prepRow(it, items) {
+  function itemRow(it, items) {
+    const meta = ITEM_KIND[itemCtx ? itemCtx.kind : "prep"];
     const row = document.createElement("div");
     row.className = "segment-row";
     row.innerHTML = `
-      <input type="text" class="prep-name" placeholder="準備物名（例: マイク）" />
+      <input type="text" class="prep-name" />
       <input type="time" class="prep-time" title="時刻" />
       <button class="icon-btn danger" data-act="del" title="この行を削除">✕</button>`;
     const name = row.querySelector(".prep-name");
     const time = row.querySelector(".prep-time");
+    name.placeholder = meta.placeholder;
     name.value = it.name || "";
     time.value = it.time || "";
     name.addEventListener("input", () => { it.name = name.value; });
@@ -582,34 +601,34 @@
     row.querySelector('[data-act="del"]').addEventListener("click", () => {
       const idx = items.indexOf(it);
       if (idx >= 0) items.splice(idx, 1);
-      if (items.length === 0) items.push({ name: "", time: (prepCtx && prepCtx.session.start) || "" });
-      renderPrepRows(items);
+      if (items.length === 0) items.push({ name: "", time: (itemCtx && itemCtx.session.start) || "" });
+      renderItemRows(items);
     });
     row._items = items;
     return row;
   }
 
-  function currentPrepItems() {
+  function currentItems() {
     const first = el("prepList").firstElementChild;
     return first ? first._items : [];
   }
 
-  function closePrepModal() {
+  function closeItemModal() {
     el("prepModal").hidden = true;
-    prepCtx = null;
+    itemCtx = null;
   }
 
-  function savePrep() {
-    if (!prepCtx) return;
-    const items = currentPrepItems()
+  function saveItem() {
+    if (!itemCtx) return;
+    const items = currentItems()
       .filter((x) => (x.name || "").trim())
       .map((x) => ({ name: x.name.trim(), time: x.time || "" }));
-    setPrep(prepCtx.session.id, items);
-    closePrepModal();
+    ITEM_KIND[itemCtx.kind].set(itemCtx.session.id, items);
+    closeItemModal();
     renderAll();
   }
 
-  // 準備物をテキスト化（CSV/集約表示用）
+  // 準備物・備考をテキスト化（CSV/集約表示用）
   function prepToText(items) {
     return sortedPrep(items).map((it) => (it.time ? it.time + " " : "") + (it.name || "")).join(" / ");
   }
@@ -851,28 +870,34 @@ ${roleXfs}
       return seg ? seg.roleId : null;
     };
 
-    // 列構成: A=開始 B=〜 C=終了 D=タイムスケジュール E=配布タイミング F〜=メンバー 末尾=準備物
-    const TIMING_COL = 5;          // 配布タイミング列（★）
-    const MEMBER_COL0 = 6;         // メンバー列の開始番号
-    const PREP_COL = 6 + members.length; // 準備物列（一番右）
+    // 列構成: A=開始 B=〜 C=終了 D=タイムスケジュール E=配布タイミング F〜=メンバー 準備物 備考(最右)
+    const TIMING_COL = 5;                  // 配布タイミング列（★）
+    const MEMBER_COL0 = 6;                 // メンバー列の開始番号
+    const PREP_COL = 6 + members.length;   // 準備物列
+    const NOTE_COL = 7 + members.length;   // 備考列（一番右）
 
     // 各列のキー配列（結合判定用）
     const titleKeys = slots.map((t) => { const s = sessionAt(t); return s ? s.id : null; });
     const memberKeys = members.map((m) => slots.map((t) => roleAt(m, t)));
 
-    // 準備物: 各アイテムを「時刻を含む5分スロット」の行に配置（複数は連結）
-    const prepByRow = slots.map(() => []);
-    daySessions.forEach((s) => {
-      getPrep(s.id).forEach((it) => {
-        const tm = toMin(it.time);
-        if (tm === null || !it.name) return;
-        const slot = Math.floor(tm / SLOT_MIN) * SLOT_MIN;
-        let idx = Math.round((slot - startMin) / SLOT_MIN);
-        if (idx < 0) idx = 0;
-        if (idx > slots.length - 1) idx = slots.length - 1;
-        prepByRow[idx].push(it.name);
+    // 準備物・備考: 各アイテムを「時刻を含む5分スロット」の行に配置（複数は連結）
+    const itemsByRow = (getter) => {
+      const arr = slots.map(() => []);
+      daySessions.forEach((s) => {
+        getter(s.id).forEach((it) => {
+          const tm = toMin(it.time);
+          if (tm === null || !it.name) return;
+          const slot = Math.floor(tm / SLOT_MIN) * SLOT_MIN;
+          let idx = Math.round((slot - startMin) / SLOT_MIN);
+          if (idx < 0) idx = 0;
+          if (idx > slots.length - 1) idx = slots.length - 1;
+          arr[idx].push(it.name);
+        });
       });
-    });
+      return arr;
+    };
+    const prepByRow = itemsByRow(getPrep);
+    const noteByRow = itemsByRow(getNotes);
 
     // 行数 = ヘッダ1 + slots
     const rowsXml = [];
@@ -887,6 +912,7 @@ ${roleXfs}
     header += cellXml(`${colLetter(TIMING_COL)}1`, XF.HEADER, "配布タイミング");
     members.forEach((m, i) => { header += cellXml(`${colLetter(MEMBER_COL0 + i)}1`, XF.HEADER, m.name || "(無名)"); });
     header += cellXml(`${colLetter(PREP_COL)}1`, XF.HEADER, "準備物");
+    header += cellXml(`${colLetter(NOTE_COL)}1`, XF.HEADER, "備考");
     header += `</row>`;
     rowsXml.push(header);
     merges.push("A1:C1");
@@ -941,13 +967,16 @@ ${roleXfs}
       members.forEach((m, mi) => {
         row += cellXml(`${colLetter(MEMBER_COL0 + mi)}${rowNum}`, memStyleByRow[mi][r], memTextByRow[mi][r]);
       });
-      // 準備物列（一番右）: 準備物名
+      // 準備物列: 準備物名
       row += cellXml(`${colLetter(PREP_COL)}${rowNum}`, prepText ? XF.TITLE : XF.EMPTY, prepText);
+      // 備考列（一番右）: 備考内容
+      const noteText = noteByRow[r].join(" / ");
+      row += cellXml(`${colLetter(NOTE_COL)}${rowNum}`, noteText ? XF.TITLE : XF.EMPTY, noteText);
       row += `</row>`;
       rowsXml.push(row);
     });
 
-    const lastCol = colLetter(PREP_COL);
+    const lastCol = colLetter(NOTE_COL);
     const cols = `<cols>` +
       `<col min="1" max="1" width="7" customWidth="1"/>` +
       `<col min="2" max="2" width="3" customWidth="1"/>` +
@@ -956,6 +985,7 @@ ${roleXfs}
       `<col min="${TIMING_COL}" max="${TIMING_COL}" width="12" customWidth="1"/>` +
       `<col min="${MEMBER_COL0}" max="${MEMBER_COL0 + members.length - 1}" width="9" customWidth="1"/>` +
       `<col min="${PREP_COL}" max="${PREP_COL}" width="20" customWidth="1"/>` +
+      `<col min="${NOTE_COL}" max="${NOTE_COL}" width="20" customWidth="1"/>` +
       `</cols>`;
     const mergeXml = merges.length
       ? `<mergeCells count="${merges.length}">${merges.map((m) => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>`
@@ -1063,9 +1093,10 @@ ${roleXfs}
           ...d2.map((s) => toSession(s, 2)),
         ];
 
-        // セッション/メンバーのIDが変わるため、担当・準備物データはクリア
+        // セッション/メンバーのIDが変わるため、担当・準備物・備考データはクリア
         state.assignments = {};
         state.prep = {};
+        state.notes = {};
 
         // 任意項目: イベント名・各日の日付
         if (p.eventName) state.meta.title = String(p.eventName).trim();
@@ -1184,19 +1215,21 @@ ${roleXfs}
       if (e.target === el("assignModal")) closeAssignModal();
     });
 
-    // 準備物モーダル
+    // 準備物・備考モーダル（共通）
     el("addPrep").addEventListener("click", () => {
-      const items = currentPrepItems();
-      items.push({ name: "", time: (prepCtx && prepCtx.session.start) || "" });
-      renderPrepRows(items);
+      if (!itemCtx) return;
+      const items = currentItems();
+      items.push({ name: "", time: itemCtx.session.start || "" });
+      renderItemRows(items);
     });
-    el("prepSave").addEventListener("click", savePrep);
-    el("prepCancel").addEventListener("click", closePrepModal);
+    el("prepSave").addEventListener("click", saveItem);
+    el("prepCancel").addEventListener("click", closeItemModal);
     el("prepClear").addEventListener("click", () => {
-      renderPrepRows([{ name: "", time: (prepCtx && prepCtx.session.start) || "" }]);
+      if (!itemCtx) return;
+      renderItemRows([{ name: "", time: itemCtx.session.start || "" }]);
     });
     el("prepModal").addEventListener("click", (e) => {
-      if (e.target === el("prepModal")) closePrepModal();
+      if (e.target === el("prepModal")) closeItemModal();
     });
 
     // 表示タブ：エクスポート/インポート
