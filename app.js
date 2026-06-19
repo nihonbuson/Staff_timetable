@@ -1129,7 +1129,7 @@ ${roleXfs}
 
   function csvFileName(ext) {
     const base = (state.meta.title || "kouban").replace(/[\\/:*?"<>|]/g, "_");
-    return `${base}.${ext}`;
+    return `${base}_香盤表.${ext}`;
   }
 
   function download(content, filename, type) {
